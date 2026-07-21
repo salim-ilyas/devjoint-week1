@@ -38,12 +38,10 @@ print("GEMINI:")
 
 #Using generate_content_stream instead of generate_content for streaming
 stream = client.models.generate_content_stream(
-    model="gemini-2.0-flash",
+    model="gemini-flash-latest",
     contents=prompt,
     config=types.GenerateContentConfig(
         system_instruction=system_instruction,
-        max_output_tokens=150,
-        thinking_config=types.ThinkingConfig(thinking_budget=0)
     )
 )
 
