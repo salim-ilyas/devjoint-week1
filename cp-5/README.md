@@ -17,8 +17,3 @@ output is malformed or missing expected fields.
 even if the JSON itself is valid
 - If validation fails at any step, the program reports a clear error
 instead of crashing or using bad data
-
-## Setup
-1. Add your GEMINI_API_KEY to `.env`
-2. `pip install google-genai python-dotenv`
-3. `python main.py`

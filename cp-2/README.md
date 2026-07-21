@@ -11,8 +11,3 @@ model's behavior and required output format
 - Three few-shot examples demonstrating the exact input → output
 pattern expected
 - User prompt still taken as free-form input
-
-## Setup
-1. Add your GEMINI_API_KEY to `.env`
-2. `pip install google-genai python-dotenv`
-3. `python main.py`

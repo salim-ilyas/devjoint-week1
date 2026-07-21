@@ -37,8 +37,3 @@ exits cleanly with a readable message instead of a raw traceback.
 ### 5. Max Retries Exceeded
 If all 3 retry attempts fail, the program stops and informs the user
 to try again later, rather than retrying indefinitely.
-
-## Setup
-1. Add your GEMINI_API_KEY to `.env`
-2. `pip install google-genai python-dotenv`
-3. `python main.py`
