@@ -1,0 +1,56 @@
+import os
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+import time
+
+#Loading .env file, so that we can read the API key
+load_dotenv()
+
+#Creating the client using the key from environment variable
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+#Setting the system instruction
+system_instruction = """You must respond with ONLY the following two lines. Do not add headers, bullet points, markdown formatting, numbered sections, or any additional information beyond these two lines:
+
+Explanation: <a simple 2-3 sentence explanation>
+Analogy: <a short, relatable analogy>
+
+Example 1:
+User: What is gravity?
+Explanation: Gravity is a force that pulls objects toward each other. On Earth, it pulls everything toward the ground.
+Analogy: It's like an invisible magnet between Earth and everything on it.
+
+Example 2:
+User: What is an API?
+Explanation: An API lets two computer programs talk to each other and exchange information.
+Analogy: It's like a waiter taking your order to the kitchen and bringing back your food.
+
+Example 3:
+User: What is electricity?
+Explanation: Electricity is the flow of tiny particles called electrons through a wire, which powers devices.
+Analogy: It's like water flowing through a pipe, powering anything it passes through."""
+
+prompt = input("Enter your prompt for Gemini: ")
+print("Sending the prompt to Gemini...\n")
+
+print("GEMINI:")
+
+#Using generate_content_stream instead of generate_content for streaming
+stream = client.models.generate_content_stream(
+    model="gemini-2.0-flash",
+    contents=prompt,
+    config=types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        max_output_tokens=150,
+        thinking_config=types.ThinkingConfig(thinking_budget=0)
+    )
+)
+
+#Looping through each chunk as it arrives and print immediately
+for chunk in stream:
+    if chunk.text:
+        print(chunk.text, end="", flush=True)
+        time.sleep(0.05) # a small delay for better readability
+
+print()  # final newline after streaming finishes
