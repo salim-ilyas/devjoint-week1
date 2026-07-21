@@ -3,13 +3,13 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-#Loading .env file, so that we can read the API key
+# loading .env file, so that we can read the API key
 load_dotenv()
 
-#Creating the client using the key from environment variable
+# creating the client using the key from environment variable
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-#Setting the system instruction
+# setting the system instruction
 system_instruction = ("""
 You must respond with ONLY the following two lines. Do not add headers, bullet points, markdown formatting, numbered sections, or any additional information beyond these two lines:
 
@@ -34,7 +34,7 @@ Analogy: It's like water flowing through a pipe, powering anything it passes thr
 prompt = input("Enter your prompt for Gemini: ")
 print("Sending the prompt to Gemini...")
 
-#Sending your prompt with system instruction
+# sending your prompt with system instruction
 response = client.models.generate_content(
     model="gemini-flash-latest",
     contents=prompt,
@@ -43,6 +43,6 @@ response = client.models.generate_content(
     )
 )
 
-#Printing the response from the model
+# printing the response from the model
 print("\nGEMINI:")
 print(response.text)

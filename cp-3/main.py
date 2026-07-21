@@ -4,13 +4,13 @@ from google import genai
 from google.genai import types
 import time
 
-#Loading .env file, so that we can read the API key
+# loading .env file, so that we can read the API key
 load_dotenv()
 
-#Creating the client using the key from environment variable
+# creating the client using the key from environment variable
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-#Setting the system instruction
+# setting the system instruction
 system_instruction = """You must respond with ONLY the following two lines. Do not add headers, bullet points, markdown formatting, numbered sections, or any additional information beyond these two lines:
 
 Explanation: <a simple 2-3 sentence explanation>
@@ -36,7 +36,7 @@ print("Sending the prompt to Gemini...\n")
 
 print("GEMINI:")
 
-#Using generate_content_stream instead of generate_content for streaming
+# using generate_content_stream instead of generate_content for streaming
 stream = client.models.generate_content_stream(
     model="gemini-flash-latest",
     contents=prompt,
@@ -45,7 +45,7 @@ stream = client.models.generate_content_stream(
     )
 )
 
-#Looping through each chunk as it arrives and print immediately
+# looping through each chunk as it arrives and print immediately
 for chunk in stream:
     if chunk.text:
         print(chunk.text, end="", flush=True)
