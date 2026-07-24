@@ -1,104 +1,155 @@
 import os
+import random
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
 import time
-from google.genai import errors
-import json
+from pydantic import BaseModel, ValidationError
 
-# loading .env file, so that we can read the API key
+# loading .env file so that we can read the API key
 load_dotenv()
-
+# checking GEMINI_API_KEY exists before creating the client
+api_key = os.environ.get("GEMINI_API_KEY")
+if not api_key:
+    raise RuntimeError("No API key found.")
 # creating the client using the key from environment variable
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=api_key)
 
-# updated system instruction: now asks for JSON instead of plain text
-system_instruction = """You must respond with ONLY valid JSON, in exactly this format, with no extra text before or after:
+# pydantic model for validating the structured response from Gemini
+class ExplanationResponse(BaseModel):
+    explanation: str
+    analogy: str
 
-{
-"explanation": "a simple 2-3 sentence explanation",
-"analogy": "a short, relatable analogy"
-}
+# setting the system instruction
+system_instruction = ("""
+Given a concept, provide a simple explanation and a short, relatable analogy.
 
-Example:
+Example 1:
 User: What is gravity?
-{
-"explanation": "Gravity is a force that pulls objects toward each other. On Earth, it pulls everything toward the ground.",
-"analogy": "It's like an invisible magnet between Earth and everything on it."
-}"""
+{"explanation": "Gravity is a force that pulls objects toward each other. On Earth, it pulls everything toward the ground.", "analogy": "It's like an invisible magnet between Earth and everything on it."}
+
+Example 2:
+User: What is an API?
+{"explanation": "An API lets two computer programs talk to each other and exchange information.", "analogy": "It's like a waiter taking your order to the kitchen and bringing back your food."}
+
+Example 3:
+User: What is electricity?
+{"explanation": "Electricity is the flow of tiny particles called electrons through a wire, which powers devices.", "analogy": "It's like water flowing through a pipe, powering anything it passes through."}""")
 
 prompt = input("Enter your prompt for Gemini: ")
-print("Sending the prompt to Gemini...\n")
+print("Sending the prompt to Gemini...")
+print("\nGEMINI:")
 
-max_retries = 3  # maximum number of retries for rate limit errors
+MAX_RETRIES = 4
+BASE_DELAY = 1
 
-def call_gemini_with_retry(prompt):
-    for attempt in range(1, max_retries + 1):
-        try:
-            stream = client.models.generate_content_stream(
-                model="gemini-flash-latest",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    http_options=types.HttpOptions(timeout=10000)  # 10 second timeout in milliseconds
-                )
-            )
-            full_response = ""  # collects all chunks into one string
-            print("GEMINI:")
-            for chunk in stream:
-                if chunk.text:
-                    print(chunk.text, end="", flush=True)
-                    full_response += chunk.text
-                    time.sleep(0.05)
-            print()
-            return full_response  # now actually returns the collected text
 
-        except errors.ClientError as e:
-            if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
-                wait_time = 5 * attempt  # waiting longer each retry
-                print(f"\n[Rate limit hit. Retrying in {wait_time}s ({attempt} out of {max_retries} retries)]")
-                time.sleep(wait_time)
-            else:
-                print(f"\n[API error: {e}]")
-                return None
+def get_status_code(error):
+    return getattr(error, "code", None) or getattr(error, "status_code", None)
 
-        except TimeoutError:
-            print(f"\n[Request timed out. Retrying... ({attempt} out of {max_retries} retries)]")
-            time.sleep(3)
+def is_retryable_api_error(error):
+    status = get_status_code(error)
+    if status == 429:
+        return True
+    if status is not None and 500 <= status < 600:
+        return True
+    return False
 
-        except Exception as e:
-            print(f"\n[Unexpected error: {e}]")
-            return None
 
-    print("\n[Failed after max retries. Please try again later.]")
-    return None
+def get_retry_delay(error, attempt):
+    retry_after = getattr(error, "retry_after", None)
+    if retry_after:
+        return float(retry_after)
+    delay = BASE_DELAY * (2 ** attempt)
+    jitter = random.uniform(0, delay * 0.5)
+    return delay + jitter
 
-def validate_json_output(raw_text):
-    if raw_text is None:
-        return None
 
-    # clean the output to make sure it's valid JSON
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        cleaned = cleaned.replace("json", "", 1).strip()
+collected_text = []
+finish_reason = None
+interrupted = False
+attempt = 0
+
+while True:
+    collected_text = []
+    finish_reason = None
 
     try:
-        data = json.loads(cleaned)  # convert the cleaned string to JSON
-    except json.JSONDecodeError as e:
-        print(f"[Output validation failed: response was not valid JSON - {e}]")
-        return None
+        stream = client.models.generate_content_stream(
+            model="gemini-flash-latest",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                # specifying the response format and schema for structured output
+                response_mime_type="application/json",
+                response_schema=ExplanationResponse,
+            )
+        )
 
-    if "explanation" not in data or "analogy" not in data:  # check if the output contains the required fields
-        print("[Output validation failed: missing required fields ('explanation', 'analogy')]")
-        return None
-    return data
+        for chunk in stream:
+            if not chunk.candidates:
+                continue
+            candidate = chunk.candidates[0]
 
-raw_output = call_gemini_with_retry(prompt)
-final_output = validate_json_output(raw_output)
+            # printing text as it streams in, flushing so it shows up immediately
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+                collected_text.append(chunk.text)
 
-if final_output:
-    print("Explanation:", final_output["explanation"])
-    print("Analogy:", final_output["analogy"])
+            if candidate.finish_reason is not None:
+                finish_reason = candidate.finish_reason
+        break
+
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\n[Streaming interrupted by user.]")
+        break
+
+    except (TimeoutError, ConnectionError) as e:
+        if attempt < MAX_RETRIES:
+            delay = get_retry_delay(e, attempt)
+            print(f"\n[Network/timeout error. Retrying in {delay:.1f}s(attempt {attempt + 1}/{MAX_RETRIES})]")
+            time.sleep(delay)
+            attempt += 1
+            continue
+        interrupted = True
+        print(f"\n[Streaming failed after {MAX_RETRIES} retries: {e}]")
+        break
+
+    except genai_errors.APIError as e:
+        if is_retryable_api_error(e) and attempt < MAX_RETRIES:
+            delay = get_retry_delay(e, attempt)
+            print(f"\n[API error {get_status_code(e)}. Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})]")
+            time.sleep(delay)
+            attempt += 1
+            continue
+        interrupted = True
+        print(f"\n[Streaming interrupted due to an API error: {e}]")
+        break
+
+    except Exception as e:
+        interrupted = True
+        print(f"\n[Streaming interrupted unexpectedly: {e}]")
+        break
+
+print()
+full_text = "".join(collected_text)
+
+if not collected_text:
+    print("No response was generated.")
+elif finish_reason not in ("STOP", None):
+    print(f"[Incomplete response. Reason: {finish_reason}]")
+elif interrupted:
+    print("[Incomplete response.]")
 else:
-    print("Response is not in valid form.")
+    # validating the structured response using the Pydantic model
+    try:
+        parsed = ExplanationResponse.model_validate_json(full_text)
+        print("\n[Complete and valid response.]")
+        print(f"\nExplanation: {parsed.explanation}")
+        print(f"Analogy: {parsed.analogy}")
+    except ValidationError as e:
+        # printing the raw text too, so a failed validation is debuggable instead of just showing the Pydantic error with no context
+        print(f"[Response rejected: output failed validation: {e}.]")
+        print(f"\nRaw response: {full_text}")
