@@ -1,18 +1,23 @@
 import os
+import random
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
 import time
-from google.genai import errors
 
 # loading .env file, so that we can read the API key
 load_dotenv()
-
+# checking GEMINI_API_KEY exists before creating the client
+api_key = os.environ.get("GEMINI_API_KEY")
+if not api_key:
+    raise RuntimeError("No API key found.")
 # creating the client using the key from environment variable
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=api_key)
 
 # setting the system instruction
-system_instruction = """You must respond with ONLY the following two lines. Do not add headers, bullet points, markdown formatting, numbered sections, or any additional information beyond these two lines:
+system_instruction = ("""
+You must respond with ONLY the following two lines. Do not add headers, bullet points, markdown formatting, numbered sections, or any additional information beyond these two lines:
 
 Explanation: <a simple 2-3 sentence explanation>
 Analogy: <a short, relatable analogy>
@@ -30,48 +35,111 @@ Analogy: It's like a waiter taking your order to the kitchen and bringing back y
 Example 3:
 User: What is electricity?
 Explanation: Electricity is the flow of tiny particles called electrons through a wire, which powers devices.
-Analogy: It's like water flowing through a pipe, powering anything it passes through."""
+Analogy: It's like water flowing through a pipe, powering anything it passes through.""")
 
 prompt = input("Enter your prompt for Gemini: ")
-print("Sending the prompt to Gemini...\n")
+print("Sending the prompt to Gemini...")
+print("\nGEMINI:")
 
-max_retries = 3  # maximum number of retries for rate limit errors
+MAX_RETRIES = 4
+BASE_DELAY = 1  # seconds
 
-def call_gemini_with_retry(prompt):
-    for attempt in range(1, max_retries + 1):
-        try:
-            stream = client.models.generate_content_stream(
-                model="gemini-flash-latest",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    http_options=types.HttpOptions(timeout=10000)  # 10 second timeout in milliseconds
-                )
+def get_status_code(error):
+    return getattr(error, "code", None) or getattr(error, "status_code", None)
+
+
+def is_retryable_api_error(error):
+    # retryable errors are 429 (rate limit) or 5xx (server errors)
+    status = get_status_code(error)
+    if status == 429:
+        return True
+    if status is not None and 500 <= status < 600:
+        return True
+    return False
+
+
+def get_retry_delay(error, attempt):
+    retry_after = getattr(error, "retry_after", None)
+    if retry_after:
+        return float(retry_after)
+    # exponential delay with jitter
+    delay = BASE_DELAY * (2 ** attempt)
+    jitter = random.uniform(0, delay * 0.5)
+    return delay + jitter
+
+
+collected_text = []
+finish_reason = None
+interrupted = False
+attempt = 0
+
+while True:
+    collected_text = []
+    finish_reason = None
+
+    try:
+        stream = client.models.generate_content_stream(
+            model="gemini-flash-latest",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction
             )
-            print("GEMINI:")
-            for chunk in stream:
-                if chunk.text:
-                    print(chunk.text, end="", flush=True)
-                    time.sleep(0.05)
-            print()
-            return
-        
-        except errors.ClientError as e:
-            if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
-                wait_time = 5 * attempt  # waiting longer each retry
-                print(f"\n[Rate limit hit. Retrying in {wait_time}s ({attempt} out of {max_retries} retries)]")
-                time.sleep(wait_time)
-            else:
-                print(f"\n[API error: {e}]")
-                return
-            
-        except Exception as e:
-            print(f"\n[Unexpected error: {e}]")
-            return
-        
-        except TimeoutError:
-            print(f"\n[Request timed out. Retrying... ({attempt} out of {max_retries} retries)]")
-            time.sleep(3)
-    print("\n[Failed after max retries. Please try again later.]")
+        )
 
-call_gemini_with_retry(prompt)
+        for chunk in stream:
+            if not chunk.candidates:
+                continue
+            candidate = chunk.candidates[0]
+
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+                collected_text.append(chunk.text)
+
+            if candidate.finish_reason is not None:
+                finish_reason = candidate.finish_reason
+        break
+
+    except KeyboardInterrupt:
+        # if the user presses Ctrl+C, we want to stop streaming and print a message
+        interrupted = True
+        print("\n[Streaming interrupted by user.]")
+        break
+
+    except (TimeoutError, ConnectionError) as e:
+        if attempt < MAX_RETRIES:
+            delay = get_retry_delay(e, attempt)
+            print(f"\n[Network/timeout error. Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})]")
+            time.sleep(delay)
+            attempt += 1
+            continue
+        interrupted = True
+        print(f"\n[Streaming failed after {MAX_RETRIES} retries: {e}]")
+        break
+
+    except genai_errors.APIError as e:
+        # covers dropped connections, timeouts, and API errors
+        if is_retryable_api_error(e) and attempt < MAX_RETRIES:
+            delay = get_retry_delay(e, attempt)
+            print(f"\n[API error {get_status_code(e)}. Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})]")
+            time.sleep(delay)
+            attempt += 1
+            continue
+        interrupted = True
+        print(f"\n[Streaming interrupted due to an API error: {e}]")
+        break
+
+    except Exception as e:
+        # covers any other unexpected errors
+        interrupted = True
+        print(f"\n[Streaming interrupted unexpectedly: {e}]")
+        break
+
+print()
+if not collected_text:
+    print("No response was generated.")
+elif finish_reason not in ("STOP", None):
+    print(f"[Incomplete response. Reason: {finish_reason}]")
+elif interrupted:
+    print("[Incomplete response.]")
+else:
+    print("[Response complete.]")
