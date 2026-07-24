@@ -5,9 +5,12 @@ from google.genai import types
 
 # loading .env file, so that we can read the API key
 load_dotenv()
-
+# checking GEMINI_API_KEY exists before creating the client
+api_key=os.environ.get("GEMINI_API_KEY")
+if not api_key:
+    raise RuntimeError("No API key found.")
 # creating the client using the key from environment variable
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=api_key)
 
 # setting the system instruction
 system_instruction = ("""
@@ -33,8 +36,7 @@ Analogy: It's like water flowing through a pipe, powering anything it passes thr
 
 prompt = input("Enter your prompt for Gemini: ")
 print("Sending the prompt to Gemini...")
-
-# sending your prompt with system instruction
+# sending your prompt
 response = client.models.generate_content(
     model="gemini-flash-latest",
     contents=prompt,
@@ -42,7 +44,13 @@ response = client.models.generate_content(
         system_instruction=system_instruction
     )
 )
-
-# printing the response from the model
-print("\nGEMINI:")
-print(response.text)
+# handling empty, blocked, or interrupted responses
+if not response.candidates:
+    print("\nNo response was generated.")
+elif response.candidates[0].finish_reason not in ("STOP", None):
+    print(f"\nIncomplete response. Reason: {response.candidates[0].finish_reason}")
+elif not response.text:
+    print("\nGemini returned an empty response.")
+else:
+    print("\nGEMINI:")
+    print(response.text) # printing the response from the model
